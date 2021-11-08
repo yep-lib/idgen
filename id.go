@@ -2,10 +2,10 @@ package idgen
 
 import (
 	"fmt"
+	"math/rand"
+	"os"
 	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 )
 
 const (
@@ -25,22 +25,7 @@ const (
 )
 
 var nanosInMilli = time.Millisecond.Nanoseconds()
-
-// IDGenerator id generator interface
-type IDGenerator interface {
-	NextID() (int64, error)            // deprecated
-	NextIDs(size int) ([]int64, error) // deprecated
-	ParseID(id int64) string
-
-	ID() int64
-	IDs(size int) []int64
-}
-
-// Config configuration
-type Config struct {
-	DataCenterID int64
-	WorkerID     int64
-}
+var generatorInstance *generator
 
 type generator struct {
 	mutex *sync.Mutex
@@ -51,90 +36,65 @@ type generator struct {
 	sequence      int64
 }
 
-// NewIDGenerator new id generator instance
-func NewIDGenerator(dataCenterID, workerID int64) (IDGenerator, error) {
-	if dataCenterID > maxDataCenterID || dataCenterID < 0 {
-		return nil, fmt.Errorf("data center id should be greater than 0 and less than %d", maxDataCenterID)
+func init() {
+	var dataCenterID, workerID int64
+	strDataCenterID := os.Getenv("DATACENTER_ID")
+	if strDataCenterID == "" {
+		dataCenterID = rand.Int63n(maxDataCenterID)
 	}
-	if workerID > maxWorkerID || workerID < 0 {
-		return nil, fmt.Errorf("worker id should be greater than 0 and less than %d", maxWorkerID)
-	}
-
-	gen := new(generator)
-
-	gen.mutex = new(sync.Mutex)
-	gen.lastTimestamp = -1
-	gen.datacenterID = dataCenterID
-	gen.workerID = workerID
-	gen.sequence = int64(0)
-
-	return gen, nil
-}
-
-// NewIDGeneratorByConfig new id generator instance by config
-func NewIDGeneratorByConfig(config Config) (IDGenerator, error) {
-	return NewIDGenerator(config.DataCenterID, config.WorkerID)
-}
-
-// MustNewIDGenerator new id generator instance without error
-func MustNewIDGenerator(config Config) IDGenerator {
-	gen, err := NewIDGenerator(config.DataCenterID, config.WorkerID)
-	if err != nil {
-		panic(err)
+	strWorkerID := os.Getenv("WORKER_ID")
+	if strWorkerID == "" {
+		workerID = rand.Int63n(maxWorkerID)
 	}
 
-	return gen
+	generatorInstance = &generator{
+		mutex:         &sync.Mutex{},
+		lastTimestamp: -1,
+		datacenterID:  dataCenterID,
+		workerID:      workerID,
+		sequence:      0,
+	}
 }
 
-func (gen *generator) NextID() (int64, error) {
-	gen.mutex.Lock()
-	defer gen.mutex.Unlock()
+func NewID() int64 {
+	generatorInstance.mutex.Lock()
+	defer generatorInstance.mutex.Unlock()
 
 	timestamp := time.Now().UnixNano() / nanosInMilli
-	delta := gen.lastTimestamp - timestamp
+	delta := generatorInstance.lastTimestamp - timestamp
 	if delta > 0 {
-		return -1, fmt.Errorf("clock moved backwards, refusing to generate id for %d milliseconds", delta)
+		panic(fmt.Errorf("clock moved backwards, refusing to generate id for %d milliseconds", delta))
 	}
 
 	if delta == 0 {
-		gen.sequence = (gen.sequence + 1) & sequenceMask
-		if gen.sequence == 0 {
+		generatorInstance.sequence = (generatorInstance.sequence + 1) & sequenceMask
+		if generatorInstance.sequence == 0 {
 			time.Sleep(1 * time.Millisecond) // until next millisecond
 			timestamp = time.Now().UnixNano() / nanosInMilli
 		}
 	} else {
-		gen.sequence = int64(0)
+		generatorInstance.sequence = int64(0)
 	}
 
-	gen.lastTimestamp = timestamp
-	// fmt.Println(timestamp, gen.datacenterID, gen.workerID, gen.sequence)
+	generatorInstance.lastTimestamp = timestamp
+
 	return (timestamp-mcepoch)<<timestampLeftShift |
-		gen.datacenterID<<dataCenterIDLeftShift |
-		gen.workerID<<workerIDLeftShift |
-		gen.sequence, nil
+		generatorInstance.datacenterID<<dataCenterIDLeftShift |
+		generatorInstance.workerID<<workerIDLeftShift |
+		generatorInstance.sequence
 }
 
-func (gen *generator) NextIDs(size int) ([]int64, error) {
+func NewIDs(size int) []int64 {
 	result := make([]int64, size)
-	var resultErr error
 
 	for i := 0; i < size; i++ {
-		id, err := gen.NextID()
-		if err != nil {
-			if resultErr == nil {
-				resultErr = err
-			} else {
-				resultErr = errors.Wrapf(resultErr, "%v", err)
-			}
-		} else {
-			result[i] = id
-		}
+		result[i] = NewID()
 	}
 
-	return result, resultErr
+	return result
 }
 
-func (gen *generator) ParseID(id int64) string {
+func ParseID(id int64) string {
 	timestamp := (id>>timestampLeftShift)&0x1FFFFFFFFFF + mcepoch
 	dataCenterID := (id >> dataCenterIDLeftShift) & 0x1F
 	workerID := (id >> workerIDLeftShift) & 0x1F
@@ -142,22 +102,4 @@ func (gen *generator) ParseID(id int64) string {
 
 	return fmt.Sprintf("timestamp: %d, data center id: %d, worker id: %d, sequence: %d",
 		timestamp, dataCenterID, workerID, sequence)
-}
-
-func (gen *generator) ID() int64 {
-	id, err := gen.NextID()
-	if err != nil {
-		panic(err)
-	}
-
-	return id
-}
-
-func (gen *generator) IDs(size int) []int64 {
-	ids, err := gen.NextIDs(size)
-	if err != nil {
-		panic(err)
-	}
-
-	return ids
 }
