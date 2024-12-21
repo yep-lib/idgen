@@ -21,7 +21,7 @@ const (
 	dataCenterIDLeftShift = sequenceBit + workerIDBit                   // 17 bit
 	timestampLeftShift    = sequenceBit + workerIDBit + dataCenterIDBit // 22 bit
 
-	mcepoch = int64(1531272738938) // YEP epoch
+	mcEpoch = int64(1531272738938) // YEP epoch
 )
 
 var nanosInMilli = time.Millisecond.Nanoseconds()
@@ -108,7 +108,7 @@ func (gen *generator) NextID() (int64, error) {
 
 	gen.lastTimestamp = timestamp
 	// fmt.Println(timestamp, gen.datacenterID, gen.workerID, gen.sequence)
-	return (timestamp-mcepoch)<<timestampLeftShift |
+	return (timestamp-mcEpoch)<<timestampLeftShift |
 		gen.datacenterID<<dataCenterIDLeftShift |
 		gen.workerID<<workerIDLeftShift |
 		gen.sequence, nil
@@ -135,7 +135,7 @@ func (gen *generator) NextIDs(size int) ([]int64, error) {
 }
 
 func (gen *generator) ParseID(id int64) string {
-	timestamp := (id>>timestampLeftShift)&0x1FFFFFFFFFF + mcepoch
+	timestamp := (id>>timestampLeftShift)&0x1FFFFFFFFFF + mcEpoch
 	dataCenterID := (id >> dataCenterIDLeftShift) & 0x1F
 	workerID := (id >> workerIDLeftShift) & 0x1F
 	sequence := id & 0xFFF
