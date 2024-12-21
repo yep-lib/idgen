@@ -23,8 +23,6 @@ const (
 	mcEpoch = int64(1531272738938) // YEP epoch
 )
 
-var nanosInMilli = time.Millisecond.Nanoseconds()
-
 // IDGenerator id generator interface
 type IDGenerator interface {
 	MustNextIntID() int64
