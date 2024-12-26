@@ -2,6 +2,8 @@ package idgen
 
 import (
 	"fmt"
+	"math/rand"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -23,71 +25,57 @@ const (
 	mcEpoch = int64(1531272738938) // YEP epoch
 )
 
-// IDGenerator id generator interface
-type IDGenerator interface {
-	MustNextIntID() int64
-	MustNextStringID() string
-
-	ParseIntID(id int64) string
-	ParseStringID(id string) string
-}
-
-// Config configuration
-type Config struct {
-	DataCenterID int64
-	WorkerID     int64
-}
-
-type generator struct {
+var (
 	mutex *sync.Mutex
 
+	datacenterID int64
+	workerID     int64
+
 	lastTimestamp int64
-	datacenterID  int64
-	workerID      int64
 	sequence      int64
-}
+)
 
-// NewIDGenerator new id generator instance
-func NewIDGenerator(dataCenterID, workerID int64) (*generator, error) {
-	if dataCenterID > maxDataCenterID || dataCenterID < 0 {
-		return nil, fmt.Errorf("data center id should be greater than 0 and less than %d", maxDataCenterID)
+func init() {
+	mutex = new(sync.Mutex)
+
+	// init datacenter id
+	strDataCenterID := os.Getenv("IDGEN_DATACENTER_ID")
+	if strDataCenterID == "" {
+		datacenterID = rand.Int63()
+	} else {
+		datacenterID, _ = strconv.ParseInt(strDataCenterID, 10, 64)
 	}
-	if workerID > maxWorkerID || workerID < 0 {
-		return nil, fmt.Errorf("worker id should be greater than 0 and less than %d", maxWorkerID)
+	if datacenterID > maxDataCenterID {
+		datacenterID = maxDataCenterID
 	}
-
-	g := new(generator)
-
-	g.mutex = new(sync.Mutex)
-	g.lastTimestamp = -1
-	g.datacenterID = dataCenterID
-	g.workerID = workerID
-	g.sequence = int64(0)
-
-	return g, nil
-}
-
-// NewIDGeneratorByConfig new id generator instance by config
-func NewIDGeneratorByConfig(config Config) (*generator, error) {
-	return NewIDGenerator(config.DataCenterID, config.WorkerID)
-}
-
-// MustNewIDGenerator new id generator instance without error
-func MustNewIDGenerator(config Config) *generator {
-	g, err := NewIDGenerator(config.DataCenterID, config.WorkerID)
-	if err != nil {
-		panic(err)
+	if datacenterID < 0 {
+		datacenterID = 0
 	}
 
-	return g
+	// init worker id
+	strWorkerID := os.Getenv("IDGEN_WORKER_ID")
+	if strWorkerID == "" {
+		workerID = rand.Int63()
+	} else {
+		workerID, _ = strconv.ParseInt(strWorkerID, 10, 64)
+	}
+	if workerID > maxWorkerID {
+		workerID = maxWorkerID
+	}
+	if workerID < 0 {
+		workerID = 0
+	}
+
+	lastTimestamp = -1
+	sequence = int64(0)
 }
 
-func (g *generator) MustNextIntID() int64 {
-	g.mutex.Lock()
-	defer g.mutex.Unlock()
+func NextIntID() int64 {
+	mutex.Lock()
+	defer mutex.Unlock()
 
 	timestamp := time.Now().UnixMilli()
-	delta := g.lastTimestamp - timestamp
+	delta := lastTimestamp - timestamp
 	if delta > 0 {
 		panic(fmt.Errorf(
 			"clock moved backwards, refusing to generate id for %d milliseconds",
@@ -96,31 +84,31 @@ func (g *generator) MustNextIntID() int64 {
 	}
 
 	if delta == 0 {
-		g.sequence = (g.sequence + 1) & sequenceMask
-		if g.sequence == 0 {
+		sequence = (sequence + 1) & sequenceMask
+		if sequence == 0 {
 			time.Sleep(1 * time.Millisecond) // until next millisecond
 			timestamp = time.Now().UnixMilli()
 		}
 	} else {
-		g.sequence = int64(0)
+		sequence = int64(0)
 	}
 
-	g.lastTimestamp = timestamp
-	// fmt.Println(timestamp, g.datacenterID, g.workerID, g.sequence)
+	lastTimestamp = timestamp
+
 	return (timestamp-mcEpoch)<<timestampLeftShift |
-		g.datacenterID<<dataCenterIDLeftShift |
-		g.workerID<<workerIDLeftShift |
-		g.sequence
+		datacenterID<<dataCenterIDLeftShift |
+		workerID<<workerIDLeftShift |
+		sequence
 }
 
-func (g *generator) MustNextStringID() string {
-	intID := g.MustNextIntID()
+func NextStringID() string {
+	intID := NextIntID()
 	strID := fmt.Sprintf("%x", intID)
 
 	return strID
 }
 
-func (g *generator) ParseIntID(id int64) string {
+func ParseIntID(id int64) string {
 	timestamp := (id>>timestampLeftShift)&0x1FFFFFFFFFF + mcEpoch
 	dataCenterID := (id >> dataCenterIDLeftShift) & 0x1F
 	workerID := (id >> workerIDLeftShift) & 0x1F
@@ -130,7 +118,7 @@ func (g *generator) ParseIntID(id int64) string {
 		timestamp, dataCenterID, workerID, sequence)
 }
 
-func (g *generator) ParseStringID(s string) string {
+func ParseStringID(s string) string {
 	id, err := strconv.ParseInt(s, 16, 64)
 	if err != nil {
 		panic(err)
